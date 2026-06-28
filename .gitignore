@@ -7,3 +7,4 @@ out/
 frontend/dist/
 frontend/node_modules/
 __pycache__/
+.e2e-screenshots/

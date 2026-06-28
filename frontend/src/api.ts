@@ -125,6 +125,13 @@ export async function createRunWithWorkspace(
 
 // ── Preview & Pages API ─────────────────────────────────────────
 
+export interface FileTreeItem {
+  name: string;
+  path?: string;
+  type?: string;
+  children?: FileTreeItem[];
+}
+
 export interface PagePreview {
   name: string;
   group: string;
@@ -135,7 +142,9 @@ export interface PagePreview {
 
 export interface PagesResponse {
   pages: PagePreview[];
+  shared: { path: string; content: string }[];
   groups: Record<string, string[]>;
+  fileTree: FileTreeItem;
   note?: string;
 }
 

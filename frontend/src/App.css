@@ -388,3 +388,8 @@ body {
 .lc-snippet { font-size: 0.7rem; color: var(--text2); overflow: hidden; text-overflow: ellipsis; max-width: 300px; }
 .linkage-broken { margin-top: 16px; padding: 12px; border: 1px solid color-mix(in srgb, var(--red) 30%, transparent); border-radius: var(--radius); background: color-mix(in srgb, var(--red) 5%, transparent); }
 .linkage-broken h4 { margin: 0 0 8px; color: var(--red); font-size: 0.85rem; }
+
+/* ── File tree component ──────────────────────────────────────── */
+.file-tree-folder-header { user-select: none; border-radius: 4px; padding: 2px 4px; }
+.file-tree-folder-header:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.file-type-badge { font-size: 0.65rem; color: var(--text2); margin-left: 4px; }

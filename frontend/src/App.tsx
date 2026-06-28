@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import type { Stage, Run, StageStatus, FileInfo, PageInput, PagePreview, LinkageResponse } from './api'
+import type { Stage, Run, StageStatus, FileInfo, PageInput, PagePreview, LinkageResponse, FileTreeItem, PagesResponse } from './api'
 import { fetchStages, createRun, getRun, listRuns, listFiles, getFileContent, getLogs, createWorkspace, createRunWithWorkspace, getRunPages, getPreviewUrl, getLinkage } from './api'
 import './App.css'
 
@@ -45,6 +45,8 @@ export default function App() {
   // ── Preview / Results view state ──────────────────────────────
   const [resultsTab, setResultsTab] = useState<ResultsTab>('preview');
   const [pagePreviews, setPagePreviews] = useState<PagePreview[]>([]);
+  const [sharedFiles, setSharedFiles] = useState<{ path: string; content: string }[]>([]);
+  const [fileTree, setFileTree] = useState<FileTreeItem | null>(null);
   const [selectedPageIdx, setSelectedPageIdx] = useState(0);
   const [linkageData, setLinkageData] = useState<LinkageResponse | null>(null);
   const [previewCodeFile, setPreviewCodeFile] = useState<string | null>(null);
@@ -83,9 +85,11 @@ export default function App() {
           // Fetch preview and linkage data on completion
           if (updated.status === 'complete') {
             try {
-              const pages = await getRunPages(currentRun.id);
-              if (pages.pages?.length > 0) {
-                setPagePreviews(pages.pages);
+              const pagesResp: PagesResponse = await getRunPages(currentRun.id);
+              if (pagesResp.pages?.length > 0) {
+                setPagePreviews(pagesResp.pages);
+                setSharedFiles(pagesResp.shared || []);
+                setFileTree(pagesResp.fileTree || null);
                 setResultsTab('preview');
               }
             } catch {}
@@ -699,35 +703,36 @@ export default function App() {
               {resultsTab === 'files' && (
                 <div className="files-view">
                   <div className="file-tree">
-                    <h3>源文件</h3>
-                    {files.filter(f => f.type === 'source').map(f => (
-                      <div
-                        key={f.path}
-                        className={`file-item ${selectedFile === f.path ? 'active' : ''}`}
-                        onClick={() => handleSelectFile(f.path)}
-                      >
-                        <span className="file-icon">
-                          {f.path.endsWith('.tsx') || f.path.endsWith('.jsx') ? '📄' :
-                           f.path.endsWith('.ts') ? '📘' :
-                           f.path.endsWith('.json') ? '📋' :
-                           f.path.endsWith('.html') ? '🌐' : '📄'}
-                        </span>
-                        <span className="file-name">{f.path.replace(/^src\//, '')}</span>
-                        <span className="file-size">{f.lines} 行</span>
-                      </div>
-                    ))}
-                    <h3 style={{ marginTop: 24 }}>产物</h3>
-                    {files.filter(f => f.type === 'artifact').map(f => (
-                      <div
-                        key={f.path}
-                        className={`file-item ${selectedFile === f.path ? 'active' : ''}`}
-                        onClick={() => handleSelectFile(f.path)}
-                      >
-                        <span className="file-icon">📊</span>
-                        <span className="file-name">{f.path.replace(/^\.figma-stage\//, '')}</span>
-                        <span className="file-size">{(f.size / 1024).toFixed(1)} KB</span>
-                      </div>
-                    ))}
+                    <h3>目录结构</h3>
+                    {fileTree ? (
+                      <FileTreeComponent
+                        tree={fileTree}
+                        allFiles={[...pagePreviews.flatMap(p => p.generated), ...sharedFiles]}
+                        onSelect={(path, content) => { setSelectedFile(path); setFileContent(content); }}
+                        selectedFile={selectedFile}
+                      />
+                    ) : (
+                      <>
+                        <h3 style={{ marginTop: 16 }}>源文件</h3>
+                        {files.filter(f => f.type === 'source').map(f => (
+                          <div key={f.path} className={`file-item ${selectedFile === f.path ? 'active' : ''}`}
+                            onClick={() => handleSelectFile(f.path)}>
+                            <span className="file-icon">{f.path.endsWith('.tsx') || f.path.endsWith('.jsx') ? '📄' : f.path.endsWith('.ts') ? '📘' : f.path.endsWith('.json') ? '📋' : f.path.endsWith('.html') ? '🌐' : '📄'}</span>
+                            <span className="file-name">{f.path.replace(/^src\//, '')}</span>
+                            <span className="file-size">{f.lines} 行</span>
+                          </div>
+                        ))}
+                        <h3 style={{ marginTop: 24 }}>产物</h3>
+                        {files.filter(f => f.type === 'artifact').map(f => (
+                          <div key={f.path} className={`file-item ${selectedFile === f.path ? 'active' : ''}`}
+                            onClick={() => handleSelectFile(f.path)}>
+                            <span className="file-icon">📊</span>
+                            <span className="file-name">{f.path.replace(/^\.figma-stage\//, '')}</span>
+                            <span className="file-size">{(f.size / 1024).toFixed(1)} KB</span>
+                          </div>
+                        ))}
+                      </>
+                    )}
                   </div>
                   <div className="file-viewer">
                     {selectedFile ? (
@@ -796,6 +801,55 @@ export default function App() {
       </div>
     </div>
   )
+}
+
+// ── FileTreeComponent ────────────────────────────────────────────
+
+function FileTreeComponent({ tree, allFiles, onSelect, selectedFile, depth = 0 }: {
+  tree: FileTreeItem;
+  allFiles: { path: string; content: string }[];
+  onSelect: (path: string, content: string) => void;
+  selectedFile: string | null;
+  depth?: number;
+}) {
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const toggle = (key: string) => setCollapsed(c => ({ ...c, [key]: !c[key] }));
+
+  if (tree.children) {
+    return (
+      <div style={{ paddingLeft: depth > 0 ? 12 : 0 }}>
+        {depth > 0 && (
+          <div className="file-tree-folder-header" onClick={() => toggle(tree.name)}
+            style={{ cursor: 'pointer', padding: '2px 0', display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span style={{ fontSize: 10 }}>{collapsed[tree.name] ? '▶' : '▼'}</span>
+            <span>📁</span>
+            <span style={{ fontSize: '0.8rem', color: '#94a3b8' }}>{tree.name}</span>
+          </div>
+        )}
+        {!collapsed[tree.name] && tree.children.map((child, i) => (
+          <FileTreeComponent key={child.name + '-' + i} tree={child} allFiles={allFiles}
+            onSelect={onSelect} selectedFile={selectedFile} depth={depth + 1} />
+        ))}
+      </div>
+    );
+  }
+
+  const icon = tree.name.endsWith('.jsx') || tree.name.endsWith('.tsx') ? '⚛️' :
+               tree.name.endsWith('.ts') ? '🔷' : tree.name.endsWith('.css') ? '🎨' :
+               tree.name.endsWith('.json') ? '📋' : tree.name.endsWith('.html') ? '🌐' : '📄';
+  const isActive = selectedFile === tree.path;
+
+  return (
+    <div className={`file-item ${isActive ? 'active' : ''}`} style={{ paddingLeft: depth * 12 + 4 }}
+      onClick={() => {
+        const found = allFiles.find(f => f.path === tree.path);
+        if (found) onSelect(found.path, found.content);
+      }}>
+      <span className="file-icon">{icon}</span>
+      <span className="file-name">{tree.name}</span>
+      {tree.type && <span className="file-type-badge">{tree.type === 'original' ? '机翻' : '生成'}</span>}
+    </div>
+  );
 }
 
 // ── StageBadge ───────────────────────────────────────────────────

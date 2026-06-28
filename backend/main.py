@@ -26,6 +26,7 @@ PROJECT_ROOT = Path(os.environ.get("PROJECT_ROOT", "/workspace/project/machineco
 RUNS_DIR = PROJECT_ROOT / ".runs"
 FIXTURES_DIR = PROJECT_ROOT / "test-fixtures"
 RUNNER_SCRIPT = PROJECT_ROOT / "backend" / "runner.mjs"
+PREVIEW_BUILDER = PROJECT_ROOT / "backend" / "preview-builder.mjs"
 
 RUNS_DIR.mkdir(exist_ok=True)
 
@@ -274,6 +275,97 @@ def get_logs(run_id: str):
     return {"logs": run.logs}
 
 
+# ── Preview & Page Data Endpoints ─────────────────────────────
+
+@app.get("/api/runs/{run_id}/pages")
+def get_run_pages(run_id: str):
+    """Get per-page data with preview info for a completed run."""
+    run = _runs.get(run_id)
+    if not run:
+        raise HTTPException(404, "Run not found")
+
+    preview_dir = Path(run.workspace) / ".figma-stage" / "preview"
+    pages_file = preview_dir / "pages.json"
+    if not pages_file.exists():
+        return {"pages": [], "note": "No preview data available (run may not have decompose stage or preview not built)"}
+
+    return json.loads(pages_file.read_text())
+
+
+@app.get("/api/runs/{run_id}/preview/{subpath:path}")
+def serve_preview(run_id: str, subpath: str):
+    """Serve preview files (HTML previews, the React app, etc.)"""
+    run = _runs.get(run_id)
+    if not run:
+        raise HTTPException(404, "Run not found")
+
+    preview_dir = Path(run.workspace) / ".figma-stage" / "preview"
+    if not preview_dir.exists():
+        raise HTTPException(404, "No preview built")
+
+    if not subpath or subpath == "":
+        subpath = "app.html"
+
+    file_path = preview_dir / subpath
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(404, f"Preview file not found: {subpath}")
+
+    return FileResponse(str(file_path))
+
+
+@app.get("/api/runs/{run_id}/linkage")
+def get_linkage(run_id: str):
+    """Get linkage relationship data between pages."""
+    run = _runs.get(run_id)
+    if not run:
+        raise HTTPException(404, "Run not found")
+
+    ws = Path(run.workspace)
+
+    # Linkage config
+    linkage_file = ws / ".figma-linkage.json"
+    linkage_config = {}
+    if linkage_file.exists():
+        linkage_config = json.loads(linkage_file.read_text())
+
+    # Contracts
+    contracts_file = ws / ".figma-stage" / "00-linkage" / "contracts-before.json"
+    contracts = []
+    if contracts_file.exists():
+        contracts = json.loads(contracts_file.read_text())
+
+    # Verification report
+    verify_file = ws / ".figma-stage" / "00-linkage" / "verification-report.json"
+    verification = {}
+    if verify_file.exists():
+        verification = json.loads(verify_file.read_text())
+
+    # Build linkage graph
+    groups = []
+    for group_name, page_names in linkage_config.items():
+        group_contracts = [c for c in contracts
+                          if c.get("sourceComponent", "").lower() in
+                          [n.lower() for n in page_names] or
+                          c.get("targetComponent", "").lower() in
+                          [n.lower() for n in page_names]]
+        groups.append({
+            "name": group_name,
+            "pages": page_names,
+            "contracts": [{
+                "pattern": c.get("pattern", ""),
+                "source": c.get("sourceComponent", ""),
+                "target": c.get("targetComponent", ""),
+                "snippet": (c.get("originalSnippet", "") or "")[:100],
+            } for c in group_contracts],
+        })
+
+    return {
+        "groups": groups,
+        "contracts": contracts,
+        "verification": verification,
+    }
+
+
 # ── Background Runner ────────────────────────────────────────────
 
 async def _execute_run(run_id: str, req: RunRequest):
@@ -347,6 +439,21 @@ async def _execute_run(run_id: str, req: RunRequest):
         if proc.returncode == 0:
             run.status = "complete"
             run.logs.append("✅ Workflow complete")
+            # Build preview after successful run
+            try:
+                run.logs.append("Building preview...")
+                preview_proc = await asyncio.create_subprocess_exec(
+                    "node", str(PREVIEW_BUILDER), run.workspace,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                p_out, p_err = await preview_proc.communicate()
+                if preview_proc.returncode == 0:
+                    run.logs.append("✅ Preview built")
+                else:
+                    run.logs.append(f"⚠️ Preview build warning: {p_err.decode()[:200]}")
+            except Exception as pe:
+                run.logs.append(f"⚠️ Preview build error: {str(pe)[:100]}")
         else:
             run.status = "error"
             run.logs.append(f"❌ Process exited with code {proc.returncode}")

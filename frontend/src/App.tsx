@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import type { Stage, Run, StageStatus, FileInfo, PageInput } from './api'
-import { fetchStages, createRun, getRun, listRuns, listFiles, getFileContent, getLogs, createWorkspace, createRunWithWorkspace } from './api'
+import type { Stage, Run, StageStatus, FileInfo, PageInput, PagePreview, LinkageResponse } from './api'
+import { fetchStages, createRun, getRun, listRuns, listFiles, getFileContent, getLogs, createWorkspace, createRunWithWorkspace, getRunPages, getPreviewUrl, getLinkage } from './api'
 import './App.css'
 
 // ── Icons ────────────────────────────────────────────────────────
@@ -15,6 +15,7 @@ const TrashIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="no
 // ── Types ────────────────────────────────────────────────────────
 
 type AppView = 'input' | 'pipeline' | 'results' | 'files';
+type ResultsTab = 'preview' | 'results' | 'files' | 'linkage';
 
 interface PageEntry {
   id: string;
@@ -41,6 +42,14 @@ export default function App() {
   const [error, setError] = useState('');
   const pollingRef = useRef<number>(0);
 
+  // ── Preview / Results view state ──────────────────────────────
+  const [resultsTab, setResultsTab] = useState<ResultsTab>('preview');
+  const [pagePreviews, setPagePreviews] = useState<PagePreview[]>([]);
+  const [selectedPageIdx, setSelectedPageIdx] = useState(0);
+  const [linkageData, setLinkageData] = useState<LinkageResponse | null>(null);
+  const [previewCodeFile, setPreviewCodeFile] = useState<string | null>(null);
+  const [previewCodeContent, setPreviewCodeContent] = useState('');
+
   // ── Input view state ──────────────────────────────────────────
   const [pages, setPages] = useState<PageEntry[]>([
     { id: crypto.randomUUID(), name: 'page1', htmlContent: '', jsxContent: '', linkageGroup: 'default' },
@@ -55,7 +64,7 @@ export default function App() {
     listRuns().then(setRunHistory).catch(() => {});
   }, []);
 
-  // Poll run status
+  // Poll run status & fetch preview data on completion
   useEffect(() => {
     if (!currentRun || currentRun.status === 'complete' || currentRun.status === 'error') {
       clearInterval(pollingRef.current);
@@ -71,6 +80,22 @@ export default function App() {
           const flist = await listFiles(currentRun.id);
           setFiles(flist);
           listRuns().then(setRunHistory);
+          // Fetch preview and linkage data on completion
+          if (updated.status === 'complete') {
+            try {
+              const pages = await getRunPages(currentRun.id);
+              if (pages.pages?.length > 0) {
+                setPagePreviews(pages.pages);
+                setResultsTab('preview');
+              }
+            } catch {}
+            try {
+              const linkage = await getLinkage(currentRun.id);
+              if (linkage.groups?.length > 0) {
+                setLinkageData(linkage);
+              }
+            } catch {}
+          }
         }
       } catch {}
     }, 1000);
@@ -467,15 +492,143 @@ export default function App() {
           ) : (
             <div className="results-view">
               <div className="results-tabs">
-                <button className={`tab ${view === 'results' ? 'active' : ''}`} onClick={() => setView('results')}>
-                  {'📊'} 结果
+                {pagePreviews.length > 0 && (
+                  <button className={`tab ${resultsTab === 'preview' ? 'active' : ''}`}
+                    onClick={() => setResultsTab('preview')}>
+                    {'🎨'} 预览
+                  </button>
+                )}
+                <button className={`tab ${resultsTab === 'results' ? 'active' : ''}`}
+                  onClick={() => setResultsTab('results')}>
+                  {'📊'} 分析
                 </button>
-                <button className={`tab ${view === 'files' ? 'active' : ''}`} onClick={() => { setView('files'); }}>
+                <button className={`tab ${resultsTab === 'files' ? 'active' : ''}`}
+                  onClick={() => { setResultsTab('files'); }}>
                   {'📁'} 文件 ({files.length})
                 </button>
+                {linkageData && (
+                  <button className={`tab ${resultsTab === 'linkage' ? 'active' : ''}`}
+                    onClick={() => setResultsTab('linkage')}>
+                    {'🔗'} 联动
+                  </button>
+                )}
               </div>
 
-              {view === 'results' && (
+              {resultsTab === 'preview' && pagePreviews.length > 0 && (
+                <div className="preview-content">
+                  {/* Page tabs */}
+                  <div className="preview-page-tabs">
+                    {pagePreviews.map((p, i) => (
+                      <button
+                        key={p.name}
+                        className={`ppt-btn ${i === selectedPageIdx ? 'active' : ''}`}
+                        onClick={() => setSelectedPageIdx(i)}
+                      >
+                        <span className="ppt-group">{p.group}</span>
+                        <span className="ppt-name">{p.name}</span>
+                      </button>
+                    ))}
+                    {/* Full app preview */}
+                    <button
+                      className={`ppt-btn ${selectedPageIdx === -1 ? 'active' : ''}`}
+                      onClick={() => setSelectedPageIdx(-1)}
+                    >
+                      <span className="ppt-group">⚡</span>
+                      <span className="ppt-name">运行效果</span>
+                    </button>
+                  </div>
+
+                  {selectedPageIdx === -1 ? (
+                    /* Full app preview */
+                    <div className="preview-app">
+                      <div className="preview-app-bar">
+                        <span>{'⚛️'} 完整多页应用预览</span>
+                        <span className="preview-pages-count">{pagePreviews.length} 页</span>
+                      </div>
+                      <iframe
+                        className="preview-iframe preview-iframe-full"
+                        src={getPreviewUrl(currentRun.id, 'app.html')}
+                        title="React App Preview"
+                      />
+                    </div>
+                  ) : (
+                    /* Per-page preview */
+                    (() => {
+                      const page = pagePreviews[selectedPageIdx];
+                      const groupPages = pagePreviews.filter(p => p.group === page.group);
+                      const pageInGroup = groupPages.findIndex(p => p.name === page.name);
+                      return (
+                        <div className="per-page-preview">
+                          {/* Side-by-side: HTML original | React preview */}
+                          <div className="per-page-columns">
+                            <div className="per-page-col">
+                              <div className="col-header">{'🌐'} 原始 HTML</div>
+                              <iframe
+                                className="preview-iframe"
+                                src={getPreviewUrl(currentRun.id, `${page.name}-original.html`)}
+                                title={`${page.name} HTML`}
+                              />
+                            </div>
+                            <div className="per-page-col">
+                              <div className="col-header">{'⚛️'} React 组件</div>
+                              <iframe
+                                className="preview-iframe"
+                                src={getPreviewUrl(currentRun.id, `${page.name}-react.html`)}
+                                title={`${page.name} React`}
+                              />
+                            </div>
+                          </div>
+
+                          {/* React code */}
+                          <div className="code-preview-section">
+                            <div className="code-preview-header">
+                              <span>{'📄'} React 代码 — {page.name}</span>
+                              <div className="code-file-selector">
+                                {page.generated?.length > 0 && (
+                                  <select
+                                    value={previewCodeFile || ''}
+                                    onChange={e => {
+                                      const f = page.generated.find(g => g.path === e.target.value);
+                                      if (f) { setPreviewCodeFile(f.path); setPreviewCodeContent(f.content); }
+                                    }}
+                                  >
+                                    <option value="">机翻代码 (JSX)</option>
+                                    {page.generated.map(g => (
+                                      <option key={g.path} value={g.path}>{g.path.replace(/^src\//, '')}</option>
+                                    ))}
+                                  </select>
+                                )}
+                              </div>
+                            </div>
+                            <pre className="preview-code">
+                              <code>{previewCodeFile ? previewCodeContent : page.jsxContent || '// No code'}</code>
+                            </pre>
+                          </div>
+
+                          {/* Group navigation hint */}
+                          {groupPages.length > 1 && (
+                            <div className="group-nav-hint">
+                              <span className="gnh-icon">{'🔗'}</span>
+                              <span>该页面在分组 <strong>{page.group}</strong> 中 (共 {groupPages.length} 页)</span>
+                              <div className="gnh-pages">
+                                {groupPages.map((gp, gi) => (
+                                  <span key={gp.name}
+                                    className={`gnh-page ${gp.name === page.name ? 'active' : ''}`}
+                                    onClick={() => setSelectedPageIdx(pagePreviews.indexOf(gp))}>
+                                    {gi + 1}. {gp.name}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()
+                  )}
+                </div>
+              )}
+
+              {resultsTab === 'results' && (
                 <div className="results-content">
                   <div className="summary-bar">
                     <span className={`sum-badge ${currentRun.status === 'complete' ? 'ok' : 'err'}`}>
@@ -543,7 +696,7 @@ export default function App() {
                 </div>
               )}
 
-              {view === 'files' && (
+              {resultsTab === 'files' && (
                 <div className="files-view">
                   <div className="file-tree">
                     <h3>源文件</h3>
@@ -592,6 +745,49 @@ export default function App() {
                       </div>
                     )}
                   </div>
+                </div>
+              )}
+
+              {resultsTab === 'linkage' && linkageData && (
+                <div className="linkage-view">
+                  <div className="linkage-header">
+                    <h3>{'🔗'} 联动关系</h3>
+                    <span className="linkage-summary">{linkageData.groups.length} 个分组, {linkageData.contracts.length} 个契约</span>
+                  </div>
+                  {linkageData.groups.map(group => (
+                    <div key={group.name} className="linkage-group">
+                      <div className="linkage-group-header">
+                        <span className="lg-badge">{group.name}</span>
+                        <span className="lg-count">{group.pages.join(', ')} ({group.contracts.length} 个联动)</span>
+                      </div>
+                      <div className="linkage-graph">
+                        {group.pages.map((p, i) => (
+                          <span key={p} className="lg-node" onClick={() => {
+                            const idx = pagePreviews.findIndex(pp => pp.name === p);
+                            if (idx >= 0) { setSelectedPageIdx(idx); setResultsTab('preview'); }
+                          }}>{p}</span>
+                        ))}
+                      </div>
+                      {group.contracts.map((c, ci) => (
+                        <div key={ci} className="linkage-contract">
+                          <span className="lc-pattern">[{c.pattern}]</span>
+                          <span className="lc-arrow">{c.source} {'→'} {c.target}</span>
+                          <code className="lc-snippet">{c.snippet}</code>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                  {linkageData.verification?.brokenContracts?.length > 0 && (
+                    <div className="linkage-broken">
+                      <h4>{'❌'} 断裂契约</h4>
+                      {linkageData.verification.brokenContracts.map((bc: any, i: number) => (
+                        <div key={i} className="broken-item">
+                          <strong>[{bc.pattern}]</strong> {bc.source} {'→'} {bc.parameter || bc.target}
+                          <span className="broken-detail">{bc.detail || bc.verificationDetail}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

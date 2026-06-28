@@ -122,3 +122,47 @@ export async function createRunWithWorkspace(
   if (!res.ok) throw new Error(`Failed to create run: ${res.status}`);
   return res.json();
 }
+
+// ── Preview & Pages API ─────────────────────────────────────────
+
+export interface PagePreview {
+  name: string;
+  group: string;
+  htmlContent: string;
+  jsxContent: string;
+  generated: { path: string; content: string }[];
+}
+
+export interface PagesResponse {
+  pages: PagePreview[];
+  groups: Record<string, string[]>;
+  note?: string;
+}
+
+export interface LinkageGroup {
+  name: string;
+  pages: string[];
+  contracts: { pattern: string; source: string; target: string; snippet: string }[];
+}
+
+export interface LinkageResponse {
+  groups: LinkageGroup[];
+  contracts: any[];
+  verification: any;
+}
+
+export async function getRunPages(runId: string): Promise<PagesResponse> {
+  const res = await fetch(`${BASE}/runs/${runId}/pages`);
+  if (!res.ok) throw new Error(`Failed to get pages: ${res.status}`);
+  return res.json();
+}
+
+export function getPreviewUrl(runId: string, subpath: string): string {
+  return `${BASE}/runs/${runId}/preview/${subpath}`;
+}
+
+export async function getLinkage(runId: string): Promise<LinkageResponse> {
+  const res = await fetch(`${BASE}/runs/${runId}/linkage`);
+  if (!res.ok) throw new Error(`Failed to get linkage: ${res.status}`);
+  return res.json();
+}

@@ -1,0 +1,10 @@
+.vscode/**
+.vscode-test/**
+src/**
+.gitignore
+**/.tsbuildinfo
+**/*.map
+node_modules
+.figma-stage/**
+DESIGN.md
+README.md

@@ -1,0 +1,35 @@
+{
+  "name": "figma-refactor",
+  "displayName": "Figma Refactor — 机翻代码转可维护 UI",
+  "description": "多阶段 vscode.lm + Gemini Prompt 管道，将 Figma 导出的机翻 React 代码转换为可维护的多页应用",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "figma-refactor.startWorkflow",
+        "title": "Figma Refactor: Start Workflow"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.96.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.0"
+  }
+}

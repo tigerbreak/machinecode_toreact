@@ -37,6 +37,10 @@ interface StageDefinition {
   key: string;
   label: string;
   buildPrompt: () => Promise<string>;
+  /** 此阶段是纯分析（本地计算，不调用 LLM） */
+  isAnalysisOnly?: boolean;
+  /** 分析阶段的执行函数（直接返回变更，不走 LLM + JSON 解析） */
+  executeAnalysis?: () => Promise<{ files?: FileChange[]; summary?: string }>;
   /** 此阶段输出文件列表用于 AST 检查 */
   getOutputFiles: () => string[];
   /** 写入本阶段产物到 .figma-stage/ */
@@ -301,7 +305,8 @@ export class WorkflowEngine {
     stages.push({
       key: 'baseline',
       label: '0.5 结构基线 + 联动契约 🏛️🔗',
-      buildPrompt: async () => {
+      isAnalysisOnly: true,
+      executeAnalysis: async () => {
         this.log('   🏛️ 提取 HTML 结构基线...');
         const baseline = await buildHtmlBaseline(this.workspaceRoot);
         const baselineText = formatBaselineConstraint(baseline);
@@ -313,7 +318,7 @@ export class WorkflowEngine {
         this.log(`   📊 基线: ${baseline.files.length} 个 HTML 文件`);
         this.log(`   📊 契约: ${contracts.length} 个联动点`);
 
-        // 将基线约束保存到 base-prompt 同级供后续阶段使用
+        // 将基线约束保存到后续阶段可读的位置
         const stateDir = path.join(this.workspaceRoot, '.figma-stage', '00-baseline');
         fs.mkdirSync(stateDir, { recursive: true });
         fs.writeFileSync(
@@ -324,19 +329,14 @@ export class WorkflowEngine {
           path.join(stateDir, 'linkage-constraint.txt'),
           linkageText,
         );
+        // 同时写入人类可读报告供用户查看
+        fs.writeFileSync(
+          path.join(stateDir, 'report.md'),
+          `# 结构基线报告\n\n${baselineText}\n\n${linkageText}`,
+        );
 
-        // 展示给用户的进度摘要
-        let summary = `HTML 基线: ${baseline.files.length} 文件`;
-        if (contracts.length > 0) {
-          summary += `, 联动契约: ${contracts.length} 个`;
-          const navCount = contracts.filter(c =>
-            ['console.log_drill', 'useNavigate_call', 'onClick_navigate'].includes(c.pattern),
-          ).length;
-          const callbackCount = contracts.filter(c =>
-            c.pattern === 'callback_prop',
-          ).length;
-          summary += ` (${navCount} 导航, ${callbackCount} 回调)`;
-        }
+        // 统计摘要
+        let summary = `🏛️  HTML 基线: ${baseline.files.length} 文件`;
         if (baseline.files.length > 0) {
           for (const f of baseline.files) {
             summary += `\n   📄 ${f.htmlFile}`;
@@ -344,22 +344,22 @@ export class WorkflowEngine {
             summary += ` (${f.interactiveElements.length} 交互元素)`;
           }
         }
+        if (contracts.length > 0) {
+          summary += `\n🔗  联动契约: ${contracts.length} 个`;
+          const navCount = contracts.filter(c =>
+            ['console.log_drill', 'useNavigate_call', 'onClick_navigate'].includes(c.pattern),
+          ).length;
+          const callbackCount = contracts.filter(c =>
+            c.pattern === 'callback_prop',
+          ).length;
+          summary += ` (${navCount} 导航, ${callbackCount} 回调)`;
+        } else {
+          summary += '\n🔗  未发现联动契约';
+        }
 
-        return `
-基线提取完成。
-
-${baselineText}
-
-${linkageText}
-
-【阶段目标：结构基线 + 联动契约】
-此阶段不修改任何代码，只扫描项目中的 HTML 文件和 JSX/TSX 文件，
-提取结构指纹和导航契约，供后续阶段使用。
-
-输出概述：
-${summary}
-`;
+        return { summary };
       },
+      buildPrompt: async () => '分析阶段，无需调用 LLM',
       getOutputFiles: () => ['.figma-stage/00-html-baseline/', '.figma-stage/00-linkage/', '.figma-stage/00-baseline/'],
     });
 
@@ -413,13 +413,14 @@ ${summary}
     stages.push({
       key: 'verify-linkage',
       label: '2.5 联动验证 🔗',
-      buildPrompt: async () => {
+      isAnalysisOnly: true,
+      executeAnalysis: async () => {
         this.log('   🔗 验证跨页联动契约...');
 
         // 加载重构前的契约
         const contractsPath = path.join(root, '.figma-stage', '00-linkage', 'contracts-before.json');
         if (!fs.existsSync(contractsPath)) {
-          return '未找到联动契约文件（contracts-before.json），跳过验证。';
+          return { summary: '未找到联动契约文件（contracts-before.json），跳过验证。' };
         }
 
         const contractsBefore = JSON.parse(fs.readFileSync(contractsPath, 'utf-8'));
@@ -428,40 +429,43 @@ ${summary}
         const report = await verifyLinkageContracts(root, contractsBefore);
 
         // 生成报告
-        let result = `# 🔗 跨页联动验证报告\n\n`;
-        result += `| 指标 | 数值 |\n|------|------|\n`;
-        result += `| 总契约数 | ${report.summary.total} |\n`;
-        result += `| ✅ 已验证通过 | ${report.summary.verified} |\n`;
-        result += `| ❌ 已断裂 | ${report.summary.broken} |\n\n`;
+        let summary = `# 🔗 跨页联动验证报告\n\n`;
+        summary += `| 指标 | 数值 |\n|------|------|\n`;
+        summary += `| 总契约数 | ${report.summary.total} |\n`;
+        summary += `| ✅ 已验证通过 | ${report.summary.verified} |\n`;
+        summary += `| ❌ 已断裂 | ${report.summary.broken} |\n\n`;
 
         if (report.brokenContracts.length > 0) {
-          result += `## ❌ 断裂的联动契约\n\n`;
-          result += `| 源组件 | 模式 | 参数 | 详情 |\n`;
-          result += `|--------|------|------|------|\n`;
+          summary += `## ❌ 断裂的联动契约\n\n`;
+          summary += `| 源组件 | 模式 | 参数 | 详情 |\n`;
+          summary += `|--------|------|------|------|\n`;
           for (const c of report.brokenContracts) {
-            result += `| ${c.sourceComponent} | ${c.pattern} | ${c.parameter || '-'} | ${c.verificationDetail || '未验证'} |\n`;
+            summary += `| ${c.sourceComponent} | ${c.pattern} | ${c.parameter || '-'} | ${c.verificationDetail || '未验证'} |\n`;
           }
-          result += `\n⚠️ 存在 ${report.brokenContracts.length} 个断裂的联动契约。`;
-          result += `\n建议：重新运行 Stage 2 (结构分解) 确保所有页面间导航被正确转换。\n`;
+          summary += `\n⚠️ 存在 ${report.brokenContracts.length} 个断裂的联动契约。`;
+          summary += `\n建议：重新运行 Stage 2 (结构分解) 确保所有页面间导航被正确转换。\n`;
         } else if (report.summary.total > 0) {
-          result += `✅ 所有 ${report.summary.total} 个联动契约均已满足。\n`;
+          summary += `\n✅ 所有 ${report.summary.total} 个联动契约均已满足。\n`;
         }
+
+        // 写入报告文件
+        const reportDir = path.join(root, '.figma-stage', '00-linkage');
+        fs.mkdirSync(reportDir, { recursive: true });
+        fs.writeFileSync(path.join(reportDir, 'verification-report.md'), summary);
 
         this.log(`   🔗 验证完成: ${report.summary.verified}/${report.summary.total} 通过`);
 
-        // 如果有断裂契约，在输出中抛出错误触发重试
         if (report.brokenContracts.length > 0) {
-          // 不抛异常，只是返回带警告的报告，让用户决策
           vscode.window.showWarningMessage(
             `⚠️ ${report.brokenContracts.length} 个联动契约断裂。建议重试 Stage 2。`,
-            '继续',
-            '回退到 Stage 2',
+            '知道了',
           );
         }
 
-        return result;
+        return { summary };
       },
-      getOutputFiles: () => ['.figma-stage/00-linkage/report.json'],
+      buildPrompt: async () => '分析阶段，无需调用 LLM',
+      getOutputFiles: () => ['.figma-stage/00-linkage/report.json', '.figma-stage/00-linkage/verification-report.md'],
     });
 
     stages.push({
@@ -658,6 +662,49 @@ ${summary}
         }
 
         try {
+          // ── 分析阶段（本地计算，不调用 LLM）──
+          if (stage.isAnalysisOnly && stage.executeAnalysis) {
+            const result = await stage.executeAnalysis();
+            const changes = result.files || [];
+            const summary = result.summary || '';
+
+            if (summary) {
+              this.log(`\n📋 === ${stage.label} ===`);
+              this.log(summary);
+            }
+
+            // 展示摘要给用户确认
+            const decision = await vscode.window.showInformationMessage(
+              `${stage.label}\n\n${summary}`,
+              { modal: true, detail: summary },
+              '继续',
+              '跳过',
+            );
+
+            switch (decision) {
+              case '继续':
+                if (changes.length > 0) {
+                  this.applyChanges(changes);
+                  if (stage.persistOutput) {
+                    stage.persistOutput(changes);
+                  }
+                }
+                this.state.completedStages.push(stageIndex);
+                this.saveState();
+                stageApproved = true;
+                this.log(`✅ ${stage.label} 完成`);
+                break;
+              default:
+                this.state.skippedStages.push(stageIndex);
+                this.saveState();
+                stageApproved = true;
+                this.log(`⏭️  ${stage.label} 已跳过`);
+                break;
+            }
+            continue;
+          }
+
+          // ── LLM 阶段 ──
           // 1. 构建 Prompt
           const prompt = await stage.buildPrompt();
           this.log(`   Prompt 构建完成 (${prompt.length} 字符)`);

@@ -208,36 +208,41 @@ function buildFileTree(pages, allFiles, wsDir) {
 function buildReactPreviewWithEsbuild(page, previewDir, projectRoot) {
   const tmpDir = path.join(projectRoot, '.preview-tmp');
   fs.mkdirSync(tmpDir, { recursive: true });
-  const tmpEntry = path.join(tmpDir, 'entry.jsx');
+  const tmpEntry = path.join(tmpDir, 'entry.tsx');
   const tmpOut = path.join(tmpDir, 'out.js');
 
   // Clean up code for browser consumption
   const codeParts = [];
 
-  // Clean JSX content
-  let jsxC = page.jsxContent
+  // Regex to remove import/export statements and TS type annotations
+  const stripImports = (s) => s
     .replace(/import\s+.*?from\s+['"].*?['"]\s*;?\n?/gs, '')
     .replace(/export\s+default\s+function/g, 'function')
     .replace(/export\s+const/g, 'const')
-    .replace(/export\s+default\s+/g, '');
+    .replace(/export\s+default\s+/g, '')
+    .replace(/export\s+/g, '');
+  const stripRouterHooks = (s) => s
+    .replace(/useNavigate\s*\(/g, '(()=>{})(')
+    .replace(/useParams\s*\(/g, '(()=>({}))(')
+    .replace(/useLocation\s*\(/g, '(()=>({}))(')
+    .replace(/useSearchParams\s*\(/g, '(()=>[new URLSearchParams(),()=>{}])(');
+
+  // Clean JSX content (input from user)
+  let jsxC = stripImports(page.jsxContent);
   codeParts.push(jsxC);
 
-  // Clean generated code
+  // Clean generated code (skip duplicate if it matches jsxContent)
+  const jsxCStripped = jsxC.replace(/\s+/g, '');
   for (const g of page.generated) {
-    let content = g.content
-      .replace(/import\s+.*?from\s+['"].*?['"]\s*;?\n?/gs, '')
-      .replace(/export\s+default\s+function/g, 'function')
-      .replace(/export\s+const/g, 'const')
-      .replace(/export\s+default\s+/g, '')
-      .replace(/useNavigate\s*\(/g, '(()=>{})(')
-      .replace(/useParams\s*\(/g, '(()=>({}))(')
-      .replace(/useLocation\s*\(/g, '(()=>({}))(');
+    let content = stripRouterHooks(stripImports(g.content));
+    // Skip if it's essentially the same as the JSX input
+    if (content.replace(/\s+/g, '') === jsxCStripped) continue;
     codeParts.push(`// ${g.path}\n${content}`);
   }
 
   const componentName = extractComponentName(jsxC) || extractComponentName(codeParts.join('\n')) || 'DefaultComponent';
 
-  // Write entry as .jsx (esbuild auto-detects JSX from extension)
+  // Write entry as .tsx (esbuild auto-detects TSX from extension, handles TypeScript annotations)
   const entryCode = codeParts.join('\n\n') + `
 
 function Wrapper() {
@@ -250,7 +255,8 @@ if (root) ReactDOM.createRoot(root).render(React.createElement(Wrapper));
 
   fs.writeFileSync(tmpEntry, entryCode, 'utf-8');
 
-  // Transpile JSX → JS (no bundling; React from CDN)
+  // Transpile TSX → JS (no bundling; React from CDN)
+  // esbuild auto-detects TSX from .tsx extension — no explicit loader needed
   execSync(
     `npx esbuild "${tmpEntry}" --outfile="${tmpOut}" --target=es2020`,
     { cwd: projectRoot, stdio: 'pipe', timeout: 10000 }
@@ -291,7 +297,8 @@ function buildFallbackReactPreview(pageName, jsxContent) {
     .replace(/import\s+.*?from\s+['"].*?['"]\s*;?\n?/gs, '')
     .replace(/export\s+default\s+function/g, 'function')
     .replace(/export\s+const/g, 'const')
-    .replace(/export\s+default\s+/g, '');
+    .replace(/export\s+default\s+/g, '')
+    .replace(/export\s+/g, '');
 
   return `<!DOCTYPE html>
 <html lang="zh-CN">

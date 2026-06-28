@@ -79,3 +79,35 @@ When `verify-linkage` detects broken contracts, the graph routes to `autoHeal` n
 - `@langchain/langgraph` - State machine
 - `@langchain/core` - LangChain core types
 - `openai` - OpenAI-compatible SDK for DeepSeek
+
+## Web UI (FastAPI + React)
+
+A standalone web interface for running the LangGraph pipeline without VS Code.
+
+```
+backend/main.py (FastAPI :8000)
+  |- /api/stages              - List pipeline stages
+  |- POST /api/runs           - Start a workflow run
+  |- GET  /api/runs           - Run history
+  |- GET  /api/runs/{id}      - Run status & results
+  |- GET  /api/runs/{id}/files - Generated files
+  |- GET  /api/runs/{id}/file  - File content
+  |- / (static)               - React SPA (frontend/dist/)
+  |- backend/runner.mjs (Node.js subprocess)
+       - Calls compiled LangGraph modules in out/
+
+frontend/ (React + Vite + TypeScript)
+  src/App.tsx - Main UI (Pipeline / Results / Files views)
+  src/api.ts  - API client
+  npm run dev - HMR development
+  npx vite build - Build to dist/
+```
+
+### Quick Start
+```bash
+./scripts/start-webui.sh
+# or manually:
+pip install -r backend/requirements.txt
+cd frontend && npm install && npx vite build && cd ..
+DEEPSEEK_API_KEY=sk-... python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
+```

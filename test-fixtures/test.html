@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>海量账薄机翻对照 (Before - 工业级压测)</title>
+    <style>
+        body { font-family: sans-serif; background-color: #0f172a; padding: 40px; color: #e2e8f0; }
+        .ledger-container { width: 1150px; background: #1e293b; padding: 24px; border-radius: 12px; margin: 0 auto; }
+        h2 { color: #f8fafc; margin-top: 0; font-size: 20px; }
+        .filter-bar { display: flex; gap: 16px; background: #334155; padding: 16px; border-radius: 8px; margin: 16px 0; }
+        .filter-group { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: #94a3b8; }
+        .filter-group input { background: #1e293b; border: 1px solid #475569; padding: 8px; border-radius: 4px; color: #fff; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th { background-color: #475569; color: #cbd5e1; padding: 12px; border: 1px solid #64748b; }
+        td { padding: 12px; border: 1px solid #475569; }
+        .pagination-bar { display: flex; justify-content: space-between; align-items: center; margin-top: 20px; padding-top: 16px; border-top: 1px solid #475569; font-size: 13px; color: #94a3b8; }
+        .page-btn { background: #334155; border: 1px solid #475569; color: #cbd5e1; padding: 6px 12px; border-radius: 4px; cursor: pointer; }
+        .page-btn.active { background: #38bdf8; color: #0f172a; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+<div class="ledger-container">
+    <h2>全球时间沉积物主人书籍</h2>
+    
+    <div class="filter-bar">
+        <div class="filter-group"><label>用户身份证明 (User ID)</label><input type="text" placeholder="搜索..."></div>
+        <div class="filter-group"><label>价值日期地平线 (Start)</label><input type="date"></div>
+        <div class="filter-group"><label>结束到 (End)</label><input type="date"></div>
+    </div>
+    
+    <table>
+        <thead>
+            <tr>
+                <th>实体与身份证</th>
+                <th>金钱组合</th>
+                <th>锁定与兴趣</th>
+                <th>生命线日期</th>
+                <th>开关标志</th>
+            </tr>
+        </thead>
+        <tbody>
+            <!-- 🛑 仅展示第1页样本，其余10+条数据已在 React 脏数据池中准备就绪 -->
+            <tr>
+                <td><strong style="color:#38bdf8">USR-9981-X</strong><br><small style="color:#64748b">所属：零售银行分支机构3</small></td>
+                <td><strong>$2,500,000.00</strong><br><small style="color:#64748b">校长货币: USD</small></td>
+                <td>年产量百分比 4.75%<br><small style="color:#64748b">（3个月翻滚）</small></td>
+                <td>起: 2026-01-01 (价值日期)<br>止: 2026-04-01 (成熟日期)</td>
+                <td><span style="color:#34d399">主动的</span></td>
+            </tr>
+        </tbody>
+    </table>
+    
+    <div class="pagination-bar">
+        <div>展示第 1 页的条目 (总共 12 个硬核账目)</div>
+        <div>
+            <button class="page-btn">上一页面的</button>
+            <button class="page-btn active">1</button>
+            <button class="page-btn">2</button>
+            <button class="page-btn">3</button>
+            <button class="page-btn">下一页面的</button>
+        </div>
+    </div>
+</div>
+
+</body>
+</html>

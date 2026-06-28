@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>高级用户详情与审批机翻对照 (Before - 第二页)</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: sans-serif; background-color: #0f172a; padding: 40px; color: #e2e8f0; }
+        .detail-container { width: 1100px; background: #1e293b; padding: 24px; border-radius: 12px; margin: 0 auto; display: flex; gap: 24px; }
+        .main-content { flex: 2; }
+        .sidebar-approval { flex: 1; background: #334155; padding: 20px; border-radius: 8px; height: fit-content; }
+        h2, h3 { color: #f8fafc; margin-top: 0; }
+        .data-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; font-size: 13px; }
+        .data-item { background: #475569; padding: 12px; border-radius: 6px; }
+        .btn { width: 100%; padding: 10px; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; margin-bottom: 10px; }
+        .btn-approve { background: #10b981; color: #fff; }
+        .btn-reject { background: #ef4444; color: #fff; }
+    </style>
+</head>
+<body>
+
+<div class="detail-container">
+    <!-- 左侧：核心资料与图表展现 -->
+    <div class="main-content">
+        <!-- 🛑 机翻："Time Deposit User File Review" -> "时间沉积物用户档案审查" -->
+        <h2>时间沉积物用户档案审查：<span style="color:#38bdf8">USR-9981-X</span></h2>
+        
+        <div class="data-grid">
+            <div class="data-item">
+                <!-- 🛑 机翻："Source of Wealth" -> "财富的源头" (风控术语应为：资金来源) -->
+                <div>财富的源头 (Source of Wealth)</div>
+                <strong>海外继承与投资股份</strong>
+            </div>
+            <div class="data-item">
+                <!-- 🛑 机翻："Anti-Money Laundering Cleared" -> "反对洗金钱被清除" (合规术语：反洗钱AML审查通过) -->
+                <div>反对洗金钱被清除 (AML Status)</div>
+                <strong style="color: #34d399">已被清除 (PASSED)</strong>
+            </div>
+        </div>
+
+        <!-- 📊 动态收益预测图表 -->
+        <h3>未来积累利息预测产量</h3>
+        <canvas id="detailForecastChart" style="background: #334155; padding: 16px; border-radius: 8px;"></canvas>
+    </div>
+
+    <!-- 右侧：高危机翻审批控制台 -->
+    <div class="sidebar-approval">
+        <!-- 🛑 机翻："Compliance Audit Workflow" -> "服从听力检查工作流动" -->
+        <h3>服从听力检查工作流动</h3>
+        <p style="font-size: 12px; color: #94a3b8;">此件巨额定期存款需要二级人类赞成。</p>
+        
+        <div style="margin: 16px 0; font-size: 13px;">
+            <label style="display:block; margin-bottom: 6px;">听力检查评论 (Audit Comments)</label>
+            <textarea style="width:100%; background:#1e293b; border:1px solid #475569; color:#fff; border-radius:4px; height:80px;" placeholder="写下你的听力意见..."></textarea>
+        </div>
+
+        <!-- 🛑 按钮机翻："Approve" -> "赞成同意", "Reject" -> "反驳拒绝" -->
+        <button class="btn btn-approve" onclick="alert('你点击了赞成同意')">赞成同意 (Approve)</button>
+        <button class="btn btn-reject" onclick="alert('你点击了反驳拒绝')">反驳拒绝 (Reject)</button>
+    </div>
+</div>
+
+<script>
+    const ctx = document.getElementById('detailForecastChart').getContext('2d');
+    new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: ['第1个月', '第2个月', '第3个月', '结息成熟日'],
+            datasets: [{
+                label: '预期累积利息收益 (USD)',
+                data: [9890, 19780, 29670, 39687.50],
+                borderColor: '#38bdf8',
+                tension: 0.1
+            }]
+        },
+        options: { responsive: true }
+    });
+</script>
+
+</body>
+</html>

@@ -1,8 +1,8 @@
 {
   "name": "figma-refactor",
   "displayName": "Figma Refactor — 机翻代码转可维护 UI",
-  "description": "多阶段 vscode.lm + Gemini Prompt 管道，将 Figma 导出的机翻 React 代码转换为可维护的多页应用",
-  "version": "0.1.0",
+  "description": "LangGraph + DeepSeek V4 Flash 工作流引擎，将 Figma 导出的机翻 React 代码转换为可维护的多页应用",
+  "version": "0.2.0",
   "private": true,
   "engines": {
     "vscode": "^1.96.0"
@@ -22,7 +22,22 @@
         "command": "figma-refactor.autoDebug",
         "title": "Figma Refactor: Auto Debug Full Flow"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Figma Refactor",
+      "properties": {
+        "figma-refactor.deepseekApiKey": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "DeepSeek API Key (v4-flash)。也可通过环境变量 `DEEPSEEK_API_KEY` 设置。"
+        },
+        "figma-refactor.deepseekModel": {
+          "type": "string",
+          "default": "deepseek-v4-flash",
+          "description": "DeepSeek 模型名称"
+        }
+      }
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
@@ -35,5 +50,10 @@
     "@types/vscode": "^1.96.0",
     "esbuild": "^0.24.0",
     "typescript": "^5.6.0"
+  },
+  "dependencies": {
+    "@langchain/core": "^1.2.1",
+    "@langchain/langgraph": "^1.4.7",
+    "openai": "^6.45.0"
   }
 }

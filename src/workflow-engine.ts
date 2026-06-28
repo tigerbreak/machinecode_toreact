@@ -615,10 +615,11 @@ export class WorkflowEngine {
 
   // ── 入口 ──
 
-  async run(selectedKeys: string[]): Promise<void> {
+  async run(selectedKeys: string[], autoMode: boolean = false): Promise<void> {
     this.log('╔════════════════════════════════════════╗');
     this.log('║  Figma 机翻代码 → 可维护 React UI   ║');
     this.log('║     vscode.lm + Gemini 工作流引擎    ║');
+    this.log(`║     Mode: ${autoMode ? '🤖 AUTO' : '👤 MANUAL'}                      ║`);
     this.log('╚════════════════════════════════════════╝\n');
 
     // 初始化状态
@@ -651,29 +652,84 @@ export class WorkflowEngine {
         continue;
       }
 
-      let attempt = 0;
-      const maxAttempts = 3;
-      let stageApproved = false;
+      const stageResult = await this.executeStage(stage, stageIndex, allStages, selectedStages, autoMode);
 
-      while (attempt < maxAttempts && !stageApproved) {
-        attempt++;
-        if (attempt > 1) {
-          this.log(`🔄 重试第 ${attempt} 次...`);
-        }
+      if (stageResult === 'abort') {
+        this.state.status = 'abort';
+        this.saveState();
+        this.log('🛑 工作流中止');
+        return;
+      }
+    }
 
-        try {
-          // ── 分析阶段（本地计算，不调用 LLM）──
-          if (stage.isAnalysisOnly && stage.executeAnalysis) {
-            const result = await stage.executeAnalysis();
-            const changes = result.files || [];
-            const summary = result.summary || '';
+    // 完成
+    this.state.status = 'done';
+    this.saveState();
 
-            if (summary) {
-              this.log(`\n📋 === ${stage.label} ===`);
-              this.log(summary);
+    this.log('\n🎉 工作流执行完毕！');
+    this.log(`   ✅ 完成: ${this.state.completedStages.length} 个阶段`);
+    this.log(`   ⏭️  跳过: ${this.state.skippedStages.length} 个阶段`);
+    this.log(`   ❌ 失败: ${this.state.failedStages.length} 个阶段`);
+
+    const message = autoMode
+      ? '🤖 Auto Debug 完成！请检查 .figma-stage/ 目录下的报告文件。'
+      : 'Figma Refactor 工作流完成！运行 npm install && npm run dev 启动。';
+    vscode.window.showInformationMessage(message);
+  }
+
+  // ── 执行单个阶段（含自动重试/恢复逻辑）──
+
+  /**
+   * 执行一个阶段，返回 'continue' | 'skip' | 'abort'
+   */
+  private async executeStage(
+    stage: StageDefinition,
+    stageIndex: number,
+    allStages: StageDefinition[],
+    selectedStages: StageDefinition[],
+    autoMode: boolean,
+  ): Promise<'continue' | 'skip' | 'abort'> {
+    let attempt = 0;
+    const maxAttempts = autoMode ? 5 : 3;
+
+    while (attempt < maxAttempts) {
+      attempt++;
+      if (attempt > 1) {
+        this.log(`🔄 重试第 ${attempt}/${maxAttempts} 次...`);
+      }
+
+      try {
+        // ── 分析阶段（本地计算，不调用 LLM）──
+        if (stage.isAnalysisOnly && stage.executeAnalysis) {
+          const result = await stage.executeAnalysis();
+          const changes = result.files || [];
+          const summary = result.summary || '';
+
+          if (summary) {
+            this.log(`\n📋 === ${stage.label} ===`);
+            this.log(summary);
+          }
+
+          if (autoMode) {
+            // Auto 模式：直接写入，不确认
+            if (changes.length > 0) {
+              this.applyChanges(changes);
+              if (stage.persistOutput) {
+                stage.persistOutput(changes);
+              }
+            }
+            this.state.completedStages.push(stageIndex);
+            this.saveState();
+            this.log(`✅ ${stage.label} 完成`);
+
+            // Auto-heal: 联动断裂自动回退 Stage 2
+            if (stage.key === 'verify-linkage' && result.summary?.includes('断裂')) {
+              return await this.autoHealLinkage(stageIndex, allStages, selectedStages, autoMode);
             }
 
-            // 展示摘要给用户确认
+            return 'continue';
+          } else {
+            // Manual 模式：弹窗确认
             const decision = await vscode.window.showInformationMessage(
               `${stage.label}\n\n${summary}`,
               { modal: true, detail: summary },
@@ -691,130 +747,212 @@ export class WorkflowEngine {
                 }
                 this.state.completedStages.push(stageIndex);
                 this.saveState();
-                stageApproved = true;
                 this.log(`✅ ${stage.label} 完成`);
-                break;
+                return 'continue';
               default:
                 this.state.skippedStages.push(stageIndex);
                 this.saveState();
-                stageApproved = true;
                 this.log(`⏭️  ${stage.label} 已跳过`);
-                break;
+                return 'continue';
             }
-            continue;
           }
+        }
 
-          // ── LLM 阶段 ──
-          // 1. 构建 Prompt
-          const prompt = await stage.buildPrompt();
-          this.log(`   Prompt 构建完成 (${prompt.length} 字符)`);
+        // ── LLM 阶段 ──
+        // 1. 构建 Prompt
+        const prompt = await stage.buildPrompt();
+        this.log(`   Prompt 构建完成 (${prompt.length} 字符)`);
 
-          // 2. 调用 LLM
-          const startTime = Date.now();
-          const response = await this.callLm(prompt);
-          this.log(`   LLM 调用完成 (${Date.now() - startTime}ms)`);
+        // 2. 调用 LLM
+        const startTime = Date.now();
+        const response = await this.callLm(prompt);
+        const elapsed = Date.now() - startTime;
+        this.log(`   LLM 调用完成 (${elapsed}ms)`);
 
-          // 3. 解析 JSON
-          let parsed: { files?: FileChange[]; summary?: string };
-          try {
-            parsed = this.extractJson(response);
-          } catch (e) {
-            this.log(`❌ JSON 解析失败: ${e}`);
-            if (attempt < maxAttempts) {
-              // 重试，下一次 LLM 可能输出正确的 JSON
+        // 3. 解析 JSON
+        let parsed: { files?: FileChange[]; summary?: string };
+        try {
+          parsed = this.extractJson(response);
+        } catch (e) {
+          this.log(`❌ JSON 解析失败: ${e}`);
+
+          if (autoMode && attempt < maxAttempts) {
+            // Auto 模式：用修复提示重试
+            this.log('   自动修复: 发送修复指令给 LLM...');
+            const fixPrompt = `${prompt}\n\n[重要] 上次输出不是 JSON 格式。请只输出严格 JSON，不要加任何解释文字。\n\n你的输出：\n${response}`;
+            const fixResponse = await this.callLm(fixPrompt);
+            try {
+              parsed = this.extractJson(fixResponse);
+              this.log('   ✅ 修复成功');
+            } catch {
+              this.log('   ❌ 修复失败，继续重试...');
               continue;
             }
+          } else {
+            if (attempt < maxAttempts) continue;
             throw new Error('LLM 输出无法解析为 JSON');
           }
+        }
 
-          const changes = parsed.files || [];
+        const changes = parsed.files || [];
 
-          // 4. 语法检查 (AST Guard)
-          const outputFiles = changes.map((c) => c.filePath);
-          const syntaxResult = await checkSyntaxOrRaise(
-            this.workspaceRoot,
-            outputFiles,
-          );
-          if (!syntaxResult.valid) {
-            showSyntaxErrors(syntaxResult.errors);
-            this.log(`❌ AST 语法检查失败`);
-            if (attempt < maxAttempts) {
-              // 自动重试，让 LLM 修复语法错误
-              this.log(`   自动重试中，期望 LLM 修复语法错误...`);
+        // 4. 语法检查 (AST Guard)
+        const outputFiles = changes.map((c) => c.filePath);
+        const syntaxResult = await checkSyntaxOrRaise(this.workspaceRoot, outputFiles);
+        if (!syntaxResult.valid) {
+          showSyntaxErrors(syntaxResult.errors);
+          this.log(`❌ AST 语法检查失败`);
+
+          if (autoMode && attempt < maxAttempts) {
+            // Auto 模式：告诉 LLM 修复语法错误
+            this.log('   自动修复: 发送语法错误信息给 LLM...');
+            const errorDetails = syntaxResult.errors.join('\n');
+            const fixPrompt = `${prompt}\n\n[重要] 上次生成的代码有语法错误，请修复：\n\`\`\`\n${errorDetails}\n\`\`\`\n\n本次源代码：\n${response}`;
+            const fixResponse = await this.callLm(fixPrompt);
+            try {
+              const fixed = this.extractJson(fixResponse);
+              parsed = fixed;
+              changes.length = 0;
+              changes.push(...(fixed.files || []));
+              // 重新检查语法
+              const recheck = await checkSyntaxOrRaise(this.workspaceRoot, changes.map(c => c.filePath));
+              if (recheck.valid) {
+                this.log('   ✅ 语法修复成功');
+              } else {
+                this.log('   ⚠️ 语法修复仍未通过，继续重试...');
+                continue;
+              }
+            } catch {
+              this.log('   ❌ 语法修复 JSON 解析失败，继续重试...');
               continue;
             }
+          } else {
+            if (attempt < maxAttempts) continue;
             throw new Error('AST 语法检查失败，已达最大重试次数');
           }
+        }
 
-          // 5. 人工确认
-          const decision = await this.confirmChanges(
-            stage.label,
-            changes,
-          );
+        // 5. 确认/写入
+        if (autoMode) {
+          // Auto 模式：直接写入，不确认
+          this.applyChanges(changes);
+          if (stage.persistOutput) {
+            stage.persistOutput(changes);
+          }
+          this.state.completedStages.push(stageIndex);
+          this.saveState();
+          this.log(`✅ ${stage.label} 完成`);
+          return 'continue';
+        } else {
+          // Manual 模式：人工确认
+          const decision = await this.confirmChanges(stage.label, changes);
 
           switch (decision) {
             case 'continue':
               this.applyChanges(changes);
-              // 持久化阶段输出
               if (stage.persistOutput) {
                 stage.persistOutput(changes);
               }
               this.state.completedStages.push(stageIndex);
               this.saveState();
-              stageApproved = true;
               this.log(`✅ ${stage.label} 完成`);
-              break;
+              return 'continue';
             case 'skip':
               this.state.skippedStages.push(stageIndex);
               this.saveState();
-              stageApproved = true;
               this.log(`⏭️  ${stage.label} 已跳过`);
-              break;
+              return 'continue';
             case 'retry':
-              this.log(`🔄 用户选择重试`);
               continue;
             case 'abort':
-              this.state.status = 'abort';
-              this.saveState();
-              this.log('🛑 工作流中止');
-              return;
+              return 'abort';
           }
-        } catch (error) {
-          const msg = error instanceof Error ? error.message : String(error);
-          this.log(`❌ ${stage.label} 出错: ${msg}`);
+        }
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        this.log(`❌ ${stage.label} 出错: ${msg}`);
 
-          if (attempt >= maxAttempts) {
+        if (attempt >= maxAttempts) {
+          if (autoMode) {
+            // Auto 模式：记录失败继续
+            this.state.failedStages.push(stageIndex);
+            this.saveState();
+            this.log(`⚠️  ${stage.label} 已达最大重试次数，继续下一阶段`);
+            return 'continue';
+          } else {
             const choice = await vscode.window.showErrorMessage(
               `阶段 "${stage.label}" 失败: ${msg}`,
               '跳过',
               '中止',
             );
             if (choice === '跳过') {
-              this.state.skippedStages.push(allStages.indexOf(stage));
+              this.state.skippedStages.push(stageIndex);
               this.saveState();
-              stageApproved = true;
+              return 'continue';
             } else {
-              this.state.status = 'abort';
-              this.state.failedStages.push(allStages.indexOf(stage));
-              this.saveState();
-              return;
+              return 'abort';
             }
           }
         }
       }
     }
 
-    // 完成
-    this.state.status = 'done';
-    this.saveState();
+    return 'continue';
+  }
 
-    this.log('\n🎉 工作流执行完毕！');
-    this.log(`   ✅ 完成: ${this.state.completedStages.length} 个阶段`);
-    this.log(`   ⏭️  跳过: ${this.state.skippedStages.length} 个阶段`);
-    this.log(`   ❌ 失败: ${this.state.failedStages.length} 个阶段`);
+  /**
+   * Auto-heal: 联动验证断裂时自动回退重跑 Stage 2
+   */
+  private async autoHealLinkage(
+    currentStageIndex: number,
+    allStages: StageDefinition[],
+    selectedStages: StageDefinition[],
+    autoMode: boolean,
+  ): Promise<'continue' | 'skip' | 'abort'> {
+    const maxHealRetries = 3;
 
-    vscode.window.showInformationMessage(
-      'Figma Refactor 工作流完成！运行 npm install && npm run dev 启动。',
-    );
+    for (let healAttempt = 1; healAttempt <= maxHealRetries; healAttempt++) {
+      this.log(`\n🔧 Auto-heal 第 ${healAttempt}/${maxHealRetries} 次: 重新执行 Stage 2`);
+
+      // 找到 Stage 2 (decompose)
+      const decomposeStage = allStages.find(s => s.key === 'decompose');
+      if (!decomposeStage) {
+        this.log('❌ 未找到 Stage 2 (decompose)，无法自动修复');
+        break;
+      }
+
+      const decomposeIdx = allStages.indexOf(decomposeStage);
+
+      // 重跑 Stage 2
+      const result = await this.executeStage(decomposeStage, decomposeIdx, allStages, selectedStages, true);
+      if (result === 'abort') return 'abort';
+
+      // 重跑 Stage 2.5
+      const verifyStage = allStages.find(s => s.key === 'verify-linkage');
+      if (!verifyStage) break;
+
+      const verifyIdx = allStages.indexOf(verifyStage);
+      // 清除完成状态，保证能重跑
+      this.state.completedStages = this.state.completedStages.filter(i => i !== verifyIdx);
+      this.saveState();
+
+      const verifyResult = await this.executeStage(verifyStage, verifyIdx, allStages, selectedStages, true);
+      if (verifyResult === 'abort') return 'abort';
+
+      // 如果验证通过了就不继续 heal
+      const reportPath = path.join(this.workspaceRoot, '.figma-stage', '00-linkage', 'verification-report.md');
+      if (fs.existsSync(reportPath)) {
+        const report = fs.readFileSync(reportPath, 'utf-8');
+        if (!report.includes('断裂') && !report.includes('❌')) {
+          this.log('🎉 Auto-heal 成功！所有联动契约已满足');
+          return 'continue';
+        }
+      }
+
+      this.log(`⚠️  第 ${healAttempt} 次 auto-heal 未完全修复`);
+    }
+
+    this.log('⚠️  Auto-heal 达到最大重试次数，联动验证仍有问题');
+    return 'continue';
   }
 }

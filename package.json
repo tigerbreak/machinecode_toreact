@@ -17,6 +17,10 @@
       {
         "command": "figma-refactor.startWorkflow",
         "title": "Figma Refactor: Start Workflow"
+      },
+      {
+        "command": "figma-refactor.autoDebug",
+        "title": "Figma Refactor: Auto Debug Full Flow"
       }
     ]
   },

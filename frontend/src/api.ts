@@ -82,3 +82,43 @@ export async function getLogs(runId: string): Promise<string[]> {
   const data = await res.json();
   return data.logs || [];
 }
+
+// ── Workspace (User Input) API ──────────────────────────────────
+
+export interface PageInput {
+  name: string;
+  htmlContent: string;
+  jsxContent: string;
+  linkageGroup: string;
+}
+
+export interface WorkspaceResult {
+  id: string;
+  path: string;
+  pages: number;
+  groups: string[];
+}
+
+export async function createWorkspace(pages: PageInput[]): Promise<WorkspaceResult> {
+  const res = await fetch(`${BASE}/workspaces`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pages }),
+  });
+  if (!res.ok) throw new Error(`Failed to create workspace: ${res.status}`);
+  return res.json();
+}
+
+export async function createRunWithWorkspace(
+  selectedStages: string[],
+  workspacePath: string,
+  apiKey = ''
+): Promise<{ id: string; status: string }> {
+  const res = await fetch(`${BASE}/runs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ selected_stages: selectedStages, api_key: apiKey, workspace: workspacePath }),
+  });
+  if (!res.ok) throw new Error(`Failed to create run: ${res.status}`);
+  return res.json();
+}

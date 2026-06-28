@@ -46,6 +46,15 @@ app.add_middleware(
 
 # ── Models ───────────────────────────────────────────────────────
 
+class PageInput(BaseModel):
+    name: str
+    htmlContent: str
+    jsxContent: str
+    linkageGroup: str = "default"
+
+class WorkspaceRequest(BaseModel):
+    pages: list[PageInput]
+
 class RunRequest(BaseModel):
     selected_stages: list[str]
     api_key: Optional[str] = None
@@ -83,6 +92,53 @@ _runs: dict[str, RunStatus] = {}
 def list_stages():
     """List all available pipeline stages."""
     return STAGES
+
+
+@app.post("/api/workspaces", status_code=201)
+def create_workspace(req: WorkspaceRequest):
+    """Create a workspace from submitted page inputs (HTML + JSX + linkage groups)."""
+    if not req.pages:
+        raise HTTPException(400, "At least one page is required")
+
+    ws_id = uuid.uuid4().hex[:12]
+    ws_dir = RUNS_DIR / ws_id
+    ws_dir.mkdir(parents=True)
+    src_dir = ws_dir / "src"
+    src_dir.mkdir(exist_ok=True)
+
+    # Linkage group config
+    linkage_config: dict[str, list[str]] = {}
+
+    for i, page in enumerate(req.pages):
+        # Validate
+        name = page.name or f"page_{i+1}"
+        safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
+        if not safe_name:
+            safe_name = f"page_{i+1}"
+
+        # Save HTML
+        html_path = ws_dir / f"{safe_name}.html"
+        html_path.write_text(page.htmlContent, encoding="utf-8")
+
+        # Save JSX
+        jsx_path = src_dir / f"{safe_name}.jsx"
+        jsx_path.write_text(page.jsxContent, encoding="utf-8")
+
+        # Track linkage group
+        group = page.linkageGroup or "default"
+        if group not in linkage_config:
+            linkage_config[group] = []
+        linkage_config[group].append(safe_name)
+
+    # Write linkage config
+    linkage_file = ws_dir / ".figma-linkage.json"
+    linkage_file.write_text(json.dumps(linkage_config, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # Ensure package.json exists
+    if not (ws_dir / "package.json").exists():
+        (ws_dir / "package.json").write_text('{"name":"workflow-workspace","private":true}')
+
+    return {"id": ws_id, "path": str(ws_dir), "pages": len(req.pages), "groups": list(linkage_config.keys())}
 
 
 @app.get("/api/runs")
